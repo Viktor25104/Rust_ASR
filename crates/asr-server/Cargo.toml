@@ -1,5 +1,5 @@
 [package]
-name = "asr-cli"
+name = "asr-server"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -22,8 +22,6 @@ model-gigaam = { path = "../model-gigaam" }
 model-parakeet = { path = "../model-parakeet" }
 candle-core.workspace = true
 tokenizers.workspace = true
-clap.workspace = true
-indicatif.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

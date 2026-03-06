@@ -28,11 +28,11 @@ COPY --from=planner /app/recipe.json recipe.json
 
 # Собираем только зависимости (кэшируется Docker'ом)
 ENV CUDA_COMPUTE_CAP=86
-RUN cargo chef cook --release --recipe-path recipe.json -p asr-cli
+RUN cargo chef cook --release --recipe-path recipe.json -p asr-server
 
 # Копируем исходный код и собираем приложение
 COPY . .
-RUN cargo build --release -p asr-cli
+RUN cargo build --release -p asr-server
 
 # --- Stage 2: Model Downloader (Python) ---
 FROM nvidia/cuda:12.2.2-runtime-ubuntu22.04 AS downloader

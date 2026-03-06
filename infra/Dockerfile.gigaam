@@ -24,7 +24,7 @@ COPY . .
 ENV CUDA_COMPUTE_CAP=86
 
 # Собираем релиз с фичей CUDA (уже включена в Cargo.toml)
-RUN cargo build --release -p asr-cli
+RUN cargo build --release -p asr-server
 
 # --- Stage 2: Runner ---
 FROM nvidia/cuda:12.2.2-runtime-ubuntu22.04

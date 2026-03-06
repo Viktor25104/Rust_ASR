@@ -455,23 +455,14 @@ def convert_nemo(nemo_path: str, output_dir: str, inspect_only: bool = False):
         config = create_config_json(config_info, dims, os.path.join(output_dir, "config.json"))
 
         # 6. Токенизатор
-        tokenizer_src = None
-        for candidate in [
-            os.path.join(tmpdir, f"{prefix}tokenizer.model"),
-            os.path.join(tmpdir, f"{prefix}tokenizer_spe_bpe_v128/tokenizer.model"),
-        ]:
-            if os.path.exists(candidate):
-                tokenizer_src = candidate
-                break
+        import glob
+        tokenizer_model = glob.glob(os.path.join(tmpdir, "**/tokenizer.model"), recursive=True)
+        tokenizer_vocab = glob.glob(os.path.join(tmpdir, "**/*.vocab"), recursive=True)
+        
+        vocab_path = os.path.join(output_dir, "vocab.json")
 
-        # Поиск рекурсивно
-        if tokenizer_src is None:
-            import glob
-            tok_files = glob.glob(os.path.join(tmpdir, "**/tokenizer.model"), recursive=True)
-            if tok_files:
-                tokenizer_src = tok_files[0]
-
-        if tokenizer_src:
+        if tokenizer_model:
+            tokenizer_src = tokenizer_model[0]
             dst = os.path.join(output_dir, "tokenizer.model")
             shutil.copy2(tokenizer_src, dst)
             print(f"Токенизатор скопирован: {dst}")
@@ -488,17 +479,34 @@ def convert_nemo(nemo_path: str, output_dir: str, inspect_only: bool = False):
                     score = sp.GetScore(i)
                     vocab[piece] = {"id": i, "score": score}
 
-                vocab_path = os.path.join(output_dir, "vocab.json")
                 with open(vocab_path, 'w', encoding='utf-8') as f:
                     json.dump(vocab, f, ensure_ascii=False, indent=1)
-                print(f"vocab.json сохранён: {vocab_path} ({sp.GetPieceSize()} токенов)")
+                print(f"vocab.json сохранён из SentencePiece: {vocab_path} ({sp.GetPieceSize()} токенов)")
 
             except Exception as e:
                 print(f"FATAL: ошибка при обработке токенизатора: {getattr(e, 'msg', str(e))}")
                 sys.exit(1)
+                
+        elif tokenizer_vocab:
+            vocab_src = tokenizer_vocab[0]
+            dst = os.path.join(output_dir, os.path.basename(vocab_src))
+            shutil.copy2(vocab_src, dst)
+            print(f"Vocab текст скопирован: {dst}")
+            
+            vocab = {}
+            with open(vocab_src, 'r', encoding='utf-8') as f:
+                for i, line in enumerate(f):
+                    parts = line.rstrip('\n').split('\t')
+                    piece = parts[0]
+                    score = float(parts[1]) if len(parts) > 1 else 0.0
+                    vocab[piece] = {"id": i, "score": score}
+            
+            with open(vocab_path, 'w', encoding='utf-8') as f:
+                json.dump(vocab, f, ensure_ascii=False, indent=1)
+            print(f"vocab.json сгенерирован вручную из .vocab: {vocab_path} ({len(vocab)} токенов)")
+            
         else:
-            print("FATAL: tokenizer.model не найден в архиве!")
-            import glob
+            print("FATAL: токенизатор (tokenizer.model или *.vocab) не найден в архиве!")
             for f in glob.glob(os.path.join(tmpdir, "**/*"), recursive=True):
                 print(f)
             sys.exit(1)

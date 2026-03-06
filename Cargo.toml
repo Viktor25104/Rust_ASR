@@ -6,7 +6,7 @@ members = [
     "crates/aut-encoder",
     "crates/qwen3-decoder",
     "crates/asr-pipeline",
-    "crates/asr-cli",
+    "crates/asr-server",
     "crates/model-whisper",
     "crates/model-gigaam",
     "crates/model-parakeet",
@@ -74,10 +74,7 @@ rubato = "0.16"         # Resampling
 rustfft = "6.2"         # FFT for spectrogram
 webrtc-vad = "0.4"      # VAD (WebRTC)
 
-# CLI
-clap = { version = "4.5", features = ["derive"] }
-indicatif = "0.17"      # Progress bars
-
+# Removed CLI dependencies since we only use env vars
 # Testing & Benchmarking
 criterion = { version = "0.5", features = ["html_reports"] }
 
