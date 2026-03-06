@@ -1,56 +1,77 @@
-# --- Stage 1: Builder (CUDA 12 + Rust) ---
-FROM nvidia/cuda:12.2.2-devel-ubuntu22.04 AS builder
+# --- Stage 1: Cargo Chef (Preparation) ---
+FROM nvidia/cuda:12.2.2-devel-ubuntu22.04 AS chef
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \
     PATH=/usr/local/cargo/bin:$PATH
 
-# Установка зависимостей и Rust
 RUN apt-get update && apt-get install -y \
     curl \
     pkg-config \
     libssl-dev \
     build-essential \
-    python3 python3-pip \
-    && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.85.0 \
+    && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
     && rm -rf /var/lib/apt/lists/*
 
+RUN cargo install cargo-chef
 WORKDIR /app
+
+# --- Stage 2: Cargo Chef (Recipe generation) ---
+FROM chef AS planner
 COPY . .
+RUN cargo chef prepare --recipe-path recipe.json
 
-# Задаем Compute Capability явно, чтобы убрать зависимость от nvidia-smi при сборке
-# 89=L40/Ada, 86=A40/RTX3000, 80=A100. Пусть будет 86 (совместимо с A40 и RTX 4070Ti)
+# --- Stage 3: Rust Builder (CUDA 12 + Rust) ---
+FROM chef AS builder
+COPY --from=planner /app/recipe.json recipe.json
+
+# Собираем только зависимости (кэшируется Docker'ом)
 ENV CUDA_COMPUTE_CAP=86
+RUN cargo chef cook --release --recipe-path recipe.json -p asr-server
 
-# Собираем релиз с фичей CUDA (уже включена в Cargo.toml)
+# Копируем исходный код и собираем приложение
+COPY . .
 RUN cargo build --release -p asr-server
 
-# --- Stage 2: Runner ---
-FROM nvidia/cuda:12.2.2-runtime-ubuntu22.04
+# --- Stage 4: Model Downloader (Python) ---
+FROM nvidia/cuda:12.2.2-runtime-ubuntu22.04 AS downloader
 
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y \
-    ca-certificates \
     python3 \
     python3-pip \
-    wget \
-    git \
     && rm -rf /var/lib/apt/lists/*
 
-# Требуется для скрипта загрузки моделей RustASR
+# Устанавливаем PyTorch и зависимости для скачивания/конвертации
 RUN pip3 install huggingface_hub torch safetensors sentencepiece numpy
+
+WORKDIR /app
+COPY scripts/ scripts/
+
+# Скачиваем русскую модель GigaAM v3 CTC и сохраняем её
+RUN mkdir -p /app/models \
+    && python3 scripts/convert_gigaam.py --hf ai-sage/GigaAM-v3 --hf-revision e2e_ctc --output /app/models/gigaam-v3-e2e-ctc \
+    && rm -rf /root/.cache/huggingface
+
+# --- Stage 5: Final inference image ---
+FROM nvidia/cuda:12.2.2-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Устанавливаем только ca-certificates (для https) и libssl (для Rust)
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    libssl3 \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 # Копируем бинарник с шага сборки
 COPY --from=builder /app/target/release/rustasr /app/rustasr
-COPY --from=builder /app/scripts /app/scripts
-
-# Скачиваем и конвертируем русскую модель GigaAM v3 CTC прямо в образ (через HuggingFace)
-RUN mkdir -p /app/models \
-    && python3 scripts/convert_gigaam.py --hf ai-sage/GigaAM-v3 --hf-revision e2e_ctc --output /app/models/gigaam-v3-e2e-ctc
+# Копируем только сконвертированные веса модели
+COPY --from=downloader /app/models /app/models
 
 # Переменные окружения для старта сервера
 ENV HOST="0.0.0.0:8080"
@@ -58,6 +79,7 @@ ENV RUST_LOG="info"
 ENV DEVICE="cuda"
 ENV MODEL_TYPE="gigaam"
 ENV MODEL_PATH="/app/models/gigaam-v3-e2e-ctc"
+ENV LANGUAGE="ru"
 
 EXPOSE 8080
 
