@@ -1,0 +1,48 @@
+# Git
+.git
+.gitignore
+.gitmodules
+
+# Rust
+target/
+**/*.rs.bk
+
+# Python & Scripts
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.venv/
+venv/
+env/
+ENV/
+build/
+dist/
+*.egg-info/
+
+# Models & Data (тяжелые файлы)
+# Модели скачиваются внутри контейнера (или пробрасываются через volumes),
+# поэтому копировать их с хоста не нужно. Это сильно сэкономит контекст и время сборки.
+models/
+data/
+*.nemo
+*.safetensors
+*.ckpt
+*.pt
+*.bin
+*.onnx
+*.weights
+
+# IDE & OS
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Логи и временные файлы
+logs/
+*.log
+tmp/
+temp/

@@ -1,0 +1,85 @@
+# --- Stage 1: Cargo Chef (Preparation) ---
+FROM nvidia/cuda:12.2.2-devel-ubuntu22.04 AS chef
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    PATH=/usr/local/cargo/bin:$PATH
+
+RUN apt-get update && apt-get install -y \
+    curl \
+    pkg-config \
+    libssl-dev \
+    build-essential \
+    && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN cargo install cargo-chef
+WORKDIR /app
+
+# --- Stage 2: Cargo Chef (Recipe generation) ---
+FROM chef AS planner
+COPY . .
+RUN cargo chef prepare --recipe-path recipe.json
+
+# --- Stage 3: Rust Builder (CUDA 12 + Rust) ---
+FROM chef AS builder
+COPY --from=planner /app/recipe.json recipe.json
+
+# Собираем только зависимости (кэшируется Docker'ом)
+ENV CUDA_COMPUTE_CAP=86
+RUN cargo chef cook --release --recipe-path recipe.json -p asr-cli
+
+# Копируем исходный код и собираем приложение
+COPY . .
+RUN cargo build --release -p asr-cli
+
+# --- Stage 2: Model Downloader (Python) ---
+FROM nvidia/cuda:12.2.2-runtime-ubuntu22.04 AS downloader
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y \
+    python3 \
+    python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip3 install huggingface_hub torch safetensors sentencepiece omegaconf numpy
+
+WORKDIR /app
+COPY scripts/ scripts/
+
+# Скачиваем .nemo, конвертируем в safetensors и удаляем гигабайтный оригинал
+RUN mkdir -p /app/models \
+    && python3 scripts/convert_parakeet.py --model nvidia/parakeet-tdt-1.1b --output /app/models/parakeet-tdt-1.1b \
+    && rm -rf /root/.cache/huggingface
+
+# --- Stage 3: Final inference image ---
+FROM nvidia/cuda:12.2.2-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Устанавливаем только ca-certificates (для https) и libssl (нужен для Rust)
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    libssl3 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Копируем только скомпилированный бинарник
+COPY --from=builder /app/target/release/rustasr /app/rustasr
+# Копируем только сконвертированные веса модели (без Питона!)
+COPY --from=downloader /app/models /app/models
+
+ENV HOST="0.0.0.0:8080"
+ENV RUST_LOG="info"
+ENV DEVICE="cuda"
+ENV MODEL_TYPE="parakeet"
+ENV MODEL_PATH="/app/models/parakeet-tdt-1.1b"
+# Единственное отличие от EN
+ENV LANGUAGE="uk"
+
+EXPOSE 8080
+
+CMD ["/app/rustasr"]
