@@ -345,10 +345,10 @@ struct RelPositionMultiHeadAttention {
 
 impl RelPositionMultiHeadAttention {
     fn load(d_model: usize, n_heads: usize, d_k: usize, vb: VarBuilder) -> Result<Self> {
-        let linear_q = linear_no_bias(d_model, d_model, vb.pp("linear_q"))?;
-        let linear_k = linear_no_bias(d_model, d_model, vb.pp("linear_k"))?;
-        let linear_v = linear_no_bias(d_model, d_model, vb.pp("linear_v"))?;
-        let linear_out = linear_no_bias(d_model, d_model, vb.pp("linear_out"))?;
+        let linear_q = Linear::load(d_model, d_model, vb.pp("linear_q"))?;
+        let linear_k = Linear::load(d_model, d_model, vb.pp("linear_k"))?;
+        let linear_v = Linear::load(d_model, d_model, vb.pp("linear_v"))?;
+        let linear_out = Linear::load(d_model, d_model, vb.pp("linear_out"))?;
         let linear_pos = linear_no_bias(d_model, d_model, vb.pp("linear_pos"))?;
 
         let pos_bias_u = vb.get((n_heads, d_k), "pos_bias_u")?;
