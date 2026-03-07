@@ -148,14 +148,25 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                             }
                         }
                         
+                        // Команда 'finish' получена, закрываем сокет со стороны сервера
+                        info!("Received 'finish' command. Closing connection cleanly.");
+                        let _ = socket.send(Message::Close(None)).await;
                         // Clear buffer
                         audio_buffer.clear();
                         last_transcribe_len = 0;
+                        break;
                     }
                 }
                 Message::Close(_) => {
                     info!("Client disconnected normally");
                     break;
+                }
+                Message::Ping(ping_data) => {
+                    // Отвечаем Pong на каждый Ping, чтобы клиент не обрывал связь по таймауту тишины
+                    let _ = socket.send(Message::Pong(ping_data)).await;
+                }
+                Message::Pong(_) => {
+                    // Игнорируем понг от клиента
                 }
                 _ => {}
             }
