@@ -13,7 +13,7 @@
 //!       - Если skip > 0: advance на skip фреймов
 
 use candle_core::{IndexOp, Result, Tensor, D};
-use tracing::debug;
+use tracing::{debug, info};
 
 use crate::config::TdtConfig;
 use crate::decoder::PredictionNet;
