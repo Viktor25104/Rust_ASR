@@ -88,7 +88,7 @@ impl TdtGreedyDecoder {
                 let mut indexed: Vec<(usize, f32)> = logits_vec.iter().copied().enumerate().collect();
                 indexed.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
                 let top5: Vec<String> = indexed[..5].iter().map(|(i, v)| format!("{}:{:.3}", i, v)).collect();
-                debug!(
+                info!(
                     "TDT step {}: t={}/{}, k={}, dur_idx={}, blank={:.3}, top=[{}]",
                     step_count, time_idx, t_total, k, dur_idx, blank_score, top5.join(", ")
                 );

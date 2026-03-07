@@ -204,7 +204,7 @@ impl ParakeetModel {
         let mel_f32 = self.mel_extractor.extract(samples, &self.device)?;
         let mel = mel_f32.to_dtype(self.dtype)?;
         let mel_flat = mel_f32.flatten_all()?;
-        debug!(
+        info!(
             "Mel-спектрограмма: {:?}, min={:.3}, max={:.3}, mean={:.3}",
             mel_f32.shape(),
             mel_flat.min(0)?.to_scalar::<f32>().unwrap_or(f32::NAN),
@@ -216,7 +216,7 @@ impl ParakeetModel {
         let encoder_output = self.encoder.forward(&mel)?;
         let enc_flat = encoder_output.flatten_all()?;
         let enc_f32 = enc_flat.to_dtype(candle_core::DType::F32)?;
-        debug!(
+        info!(
             "Encoder output: {:?}, min={:.3}, max={:.3}, mean={:.3}",
             encoder_output.shape(),
             enc_f32.min(0)?.to_scalar::<f32>().unwrap_or(f32::NAN),
@@ -236,7 +236,7 @@ impl ParakeetModel {
 
         // 5. Detokenize
         let text = self.tokenizer.decode(&result.tokens);
-        debug!("Transcript ({}): {}", result.tokens.len(), &text);
+        info!("Transcript ({}): {}", result.tokens.len(), &text);
 
         Ok(text)
     }
