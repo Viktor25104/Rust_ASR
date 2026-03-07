@@ -310,8 +310,8 @@ impl RelPositionalEncoding {
         let mut pe = vec![0.0f32; pe_len * d];
 
         for pos_idx in 0..pe_len {
-            // Позиция: от -(T-1) до +(T-1)
-            let pos = pos_idx as f32 - (t - 1) as f32;
+            // Позиция: от 0 до 2T-2 (как в NeMo)
+            let pos = pos_idx as f32;
             for i in 0..d / 2 {
                 let freq = 1.0 / 10000.0f32.powf(2.0 * i as f32 / d as f32);
                 let angle = pos * freq;
