@@ -298,7 +298,7 @@ impl RelPositionalEncoding {
     /// Выход: (x, pos_emb [1, 2T-1, D])
     fn forward(&self, x: &Tensor) -> Result<(Tensor, Tensor)> {
         let t = x.dim(1)?;
-        let pos_emb = self.create_pe(t, x.device())?;
+        let pos_emb = self.create_pe(t, x.device())?.to_dtype(x.dtype())?;
         Ok((x.clone(), pos_emb))
     }
 
