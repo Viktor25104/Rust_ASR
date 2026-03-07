@@ -457,8 +457,8 @@ struct ConformerFeedForward {
 
 impl ConformerFeedForward {
     fn load(d_model: usize, d_ff: usize, vb: VarBuilder) -> Result<Self> {
-        let linear1 = linear_no_bias(d_model, d_ff, vb.pp("linear1"))?;
-        let linear2 = linear_no_bias(d_ff, d_model, vb.pp("linear2"))?;
+        let linear1 = linear_with_bias(d_model, d_ff, vb.pp("linear1"))?;
+        let linear2 = linear_with_bias(d_ff, d_model, vb.pp("linear2"))?;
         Ok(Self { linear1, linear2 })
     }
 }
@@ -480,9 +480,12 @@ impl Module for ConformerFeedForward {
 /// Все conv1d без bias, batch_norm с running stats.
 struct ConformerConvolution {
     pointwise_conv1_w: Tensor, // [2*D, D, 1]
+    pointwise_conv1_b: Tensor, // [2*D]
     depthwise_conv_w: Tensor,  // [D, 1, K]
+    depthwise_conv_b: Tensor,  // [D]
     batch_norm: BatchNorm1d,
     pointwise_conv2_w: Tensor, // [D, D, 1]
+    pointwise_conv2_b: Tensor, // [D]
     d_model: usize,
     kernel_size: usize,
 }
@@ -490,15 +493,21 @@ struct ConformerConvolution {
 impl ConformerConvolution {
     fn load(d_model: usize, kernel_size: usize, vb: VarBuilder) -> Result<Self> {
         let pointwise_conv1_w = vb.get((2 * d_model, d_model, 1), "pointwise_conv1.weight")?;
+        let pointwise_conv1_b = vb.get((2 * d_model,), "pointwise_conv1.bias")?;
         let depthwise_conv_w = vb.get((d_model, 1, kernel_size), "depthwise_conv.weight")?;
+        let depthwise_conv_b = vb.get((d_model,), "depthwise_conv.bias")?;
         let batch_norm = BatchNorm1d::load(d_model, vb.pp("batch_norm"))?;
         let pointwise_conv2_w = vb.get((d_model, d_model, 1), "pointwise_conv2.weight")?;
+        let pointwise_conv2_b = vb.get((d_model,), "pointwise_conv2.bias")?;
 
         Ok(Self {
             pointwise_conv1_w,
+            pointwise_conv1_b,
             depthwise_conv_w,
+            depthwise_conv_b,
             batch_norm,
             pointwise_conv2_w,
+            pointwise_conv2_b,
             d_model,
             kernel_size,
         })
@@ -511,6 +520,8 @@ impl ConformerConvolution {
 
         // Pointwise Conv1d: [B, D, T] → [B, 2D, T]
         let x = x.conv1d(&self.pointwise_conv1_w, 0, 1, 1, 1)?;
+        let b1 = self.pointwise_conv1_b.reshape((1, 2 * self.d_model, 1))?;
+        let x = x.broadcast_add(&b1)?;
 
         // GLU: разбиваем пополам по dim=1, gate = sigmoid(b)
         let half = self.d_model;
@@ -521,6 +532,8 @@ impl ConformerConvolution {
         // Depthwise Conv1d: padding = kernel_size / 2, groups = D
         let pad = self.kernel_size / 2;
         let x = x.conv1d(&self.depthwise_conv_w, pad, 1, 1, self.d_model)?;
+        let b2 = self.depthwise_conv_b.reshape((1, self.d_model, 1))?;
+        let x = x.broadcast_add(&b2)?;
 
         // BatchNorm1d
         let x = self.batch_norm.forward(&x)?;
@@ -530,6 +543,8 @@ impl ConformerConvolution {
 
         // Pointwise Conv1d: [B, D, T] → [B, D, T]
         let x = x.conv1d(&self.pointwise_conv2_w, 0, 1, 1, 1)?;
+        let b3 = self.pointwise_conv2_b.reshape((1, self.d_model, 1))?;
+        let x = x.broadcast_add(&b3)?;
 
         // Transpose обратно: [B, D, T] → [B, T, D]
         x.permute((0, 2, 1))
