@@ -105,11 +105,16 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                             opts = opts.with_language(&state.language);
                         }
 
-                        if let Ok(result) = engine.transcribe(&samples, &opts) {
-                            if let Ok(json_str) = serde_json::to_string(&result) {
-                                // Инжектим is_final: false чтобы клиент понял, что это еще не конец строки
-                                let inject_is_final = json_str.replace("{", "{\"is_final\": false, ");
-                                let _ = socket.send(Message::Text(inject_is_final.into())).await;
+                        match engine.transcribe(&samples, &opts) {
+                            Ok(result) => {
+                                if let Ok(json_str) = serde_json::to_string(&result) {
+                                    // Инжектим is_final: false чтобы клиент понял, что это еще не конец строки
+                                    let inject_is_final = json_str.replace("{", "{\"is_final\": false, ");
+                                    let _ = socket.send(Message::Text(inject_is_final.into())).await;
+                                }
+                            }
+                            Err(e) => {
+                                error!("Streaming transcription error: {}", e);
                             }
                         }
                     }
