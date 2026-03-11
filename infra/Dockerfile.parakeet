@@ -26,15 +26,14 @@ RUN cargo chef prepare --recipe-path recipe.json
 FROM chef AS builder
 COPY --from=planner /app/recipe.json recipe.json
 
-# Собираем только зависимости (кэшируется Docker'ом)
+# Собираем только зависимости
 ENV CUDA_COMPUTE_CAP=86
 RUN cargo chef cook --release --recipe-path recipe.json -p asr-server
 
-# Копируем исходный код и собираем приложение
 COPY . .
 RUN cargo build --release -p asr-server
 
-# --- Stage 2: Model Downloader (Python) ---
+# --- Stage 4: Model Downloader (Python) ---
 FROM nvidia/cuda:12.2.2-runtime-ubuntu22.04 AS downloader
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -49,17 +48,16 @@ RUN pip3 install huggingface_hub torch safetensors sentencepiece omegaconf numpy
 WORKDIR /app
 COPY scripts/ scripts/
 
-# Скачиваем .nemo, конвертируем в safetensors и удаляем гигабайтный оригинал
+# Скачиваем Parakeet-TDT
 RUN mkdir -p /app/models \
-    && python3 scripts/convert_parakeet.py --model nvidia/parakeet-tdt-1.1b --output /app/models/parakeet-tdt-1.1b \
+    && python3 scripts/convert_parakeet.py --model nvidia/parakeet-tdt-1.1b --output /app/models/parakeet \
     && rm -rf /root/.cache/huggingface
 
-# --- Stage 3: Final inference image ---
+# --- Stage 5: Final inference image ---
 FROM nvidia/cuda:12.2.2-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Устанавливаем только ca-certificates (для https) и libssl (нужен для Rust)
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     libssl3 \
@@ -67,16 +65,14 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# Копируем только скомпилированный бинарник
 COPY --from=builder /app/target/release/rustasr /app/rustasr
-# Копируем только сконвертированные веса модели (без Питона!)
 COPY --from=downloader /app/models /app/models
 
 ENV HOST="0.0.0.0:8080"
 ENV RUST_LOG="info"
 ENV DEVICE="cuda"
 ENV MODEL_TYPE="parakeet"
-ENV MODEL_PATH="/app/models/parakeet-tdt-1.1b"
+ENV MODEL_PATH="/app/models/parakeet"
 ENV LANGUAGE="en"
 
 EXPOSE 8080

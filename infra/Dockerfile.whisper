@@ -1,0 +1,81 @@
+# --- Stage 1: Cargo Chef (Preparation) ---
+FROM nvidia/cuda:12.2.2-devel-ubuntu22.04 AS chef
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    PATH=/usr/local/cargo/bin:$PATH
+
+RUN apt-get update && apt-get install -y \
+    curl \
+    pkg-config \
+    libssl-dev \
+    build-essential \
+    && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN cargo install cargo-chef
+WORKDIR /app
+
+# --- Stage 2: Cargo Chef (Recipe generation) ---
+FROM chef AS planner
+COPY . .
+RUN cargo chef prepare --recipe-path recipe.json
+
+# --- Stage 3: Rust Builder (CUDA 12 + Rust) ---
+FROM chef AS builder
+COPY --from=planner /app/recipe.json recipe.json
+
+# Собираем только зависимости
+ENV CUDA_COMPUTE_CAP=86
+RUN cargo chef cook --release --recipe-path recipe.json -p asr-server
+
+COPY . .
+RUN cargo build --release -p asr-server
+
+# --- Stage 4: Model Downloader (Python) ---
+FROM nvidia/cuda:12.2.2-runtime-ubuntu22.04 AS downloader
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y \
+    python3 \
+    python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip3 install huggingface_hub
+
+WORKDIR /app
+COPY scripts/ scripts/
+
+# Скачиваем Whisper large-v3-turbo (или любую другую мультиязычную модель)
+RUN mkdir -p /app/models \
+    && python3 scripts/download_model.py --model openai/whisper-large-v3-turbo --output /app/models/whisper \
+    && rm -rf /root/.cache/huggingface
+
+# --- Stage 5: Final inference image ---
+FROM nvidia/cuda:12.2.2-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    libssl3 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY --from=builder /app/target/release/rustasr /app/rustasr
+COPY --from=downloader /app/models /app/models
+
+ENV HOST="0.0.0.0:8080"
+ENV RUST_LOG="info"
+ENV DEVICE="cuda"
+ENV MODEL_TYPE="whisper"
+ENV MODEL_PATH="/app/models/whisper"
+# Автоопределение языка (переопределяется при `docker run -e LANGUAGE=de`)
+ENV LANGUAGE=""
+
+EXPOSE 8080
+
+CMD ["/app/rustasr"]
