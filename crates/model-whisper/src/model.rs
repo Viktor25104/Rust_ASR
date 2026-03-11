@@ -443,10 +443,22 @@ impl AsrModel for WhisperModel {
             };
 
             // Декодирование токенов в текст
-            let text = self
+            let mut text = self
                 .tokenizer
                 .decode(&result.tokens, true)
                 .map_err(|e| AsrError::Inference(format!("Tokenizer decode error: {e}")))?;
+                
+            text = text.trim().to_string();
+            
+            // Фильтрация галлюцинаций / тишины
+            if text.is_empty() || result.no_speech_prob > 0.6 {
+                if result.no_speech_prob > 0.6 {
+                    info!("Whisper: пропуск тишины (no_speech_prob={:.2} > 0.6) для сегмента [{:.1}s - {:.1}s]", 
+                        result.no_speech_prob, chunk_start_secs, chunk_start_secs + (chunk.len() as f64 / self.sample_rate() as f64));
+                }
+                continue;
+            }
+
             result.text = text.clone();
 
             // Добавляем сегмент
