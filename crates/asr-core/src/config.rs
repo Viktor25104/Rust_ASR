@@ -127,7 +127,7 @@ impl FeatureExtractorConfig {
         }
     }
 
-    /// Конфигурация для Parakeet (80 mel bins, ln, per-utterance, HTK).
+    /// Конфигурация для Parakeet (80 mel bins, ln, per-feature, HTK).
     pub fn parakeet() -> Self {
         Self {
             sample_rate: 16000,
@@ -139,7 +139,7 @@ impl FeatureExtractorConfig {
             f_max: 8000.0,
             mel_scale: MelScale::Htk,
             log_type: LogType::Ln,
-            normalization: MelNormalization::PerUtterance,
+            normalization: MelNormalization::PerFeature,
         }
     }
 }
@@ -169,9 +169,12 @@ pub enum LogType {
 pub enum MelNormalization {
     /// Whisper-стиль: dynamic range compression (clamp max-8, normalize (x+4)/4).
     WhisperDynamicRange,
-    /// Per-utterance: вычитание среднего, деление на стандартное отклонение.
-    /// Используется GigaAM, Parakeet.
+    /// Per-utterance: вычитание глобального среднего, деление на глобальное стандартное отклонение.
+    /// Используется GigaAM.
     PerUtterance,
+    /// Per-feature: независимая нормализация каждого частотного канала (mel bin) по времени.
+    /// Используется Parakeet (NeMo).
+    PerFeature,
     /// Без нормализации.
     None,
 }

@@ -236,7 +236,7 @@ impl MelSpectrogramExtractor {
         }
             }
             MelNormalization::PerUtterance => {
-                // Per-utterance: μ/σ нормализация (GigaAM, Parakeet)
+                // Per-utterance: μ/σ нормализация (GigaAM)
                 let n = log_spec.len() as f64 * self.config.n_mels as f64;
                 if n > 0.0 {
                     let sum: f64 = log_spec
@@ -259,6 +259,47 @@ impl MelSpectrogramExtractor {
                     for frame in log_spec.iter_mut() {
                         for val in frame.iter_mut() {
                             *val = ((*val as f64 - mean) / std) as f32;
+                        }
+                    }
+                }
+            }
+            MelNormalization::PerFeature => {
+                // Per-feature: независимая нормализация каждого частотного канала (Parakeet/NeMo)
+                let num_frames = log_spec.len() as f64;
+                let n_mels = self.config.n_mels;
+                if num_frames > 0.0 {
+                    let mut means = vec![0.0f64; n_mels];
+                    let mut stds = vec![0.0f64; n_mels];
+
+                    // 1. Вычисляем сумму для каждого канала
+                    for frame in &log_spec {
+                        for (i, &val) in frame.iter().enumerate() {
+                            means[i] += val as f64;
+                        }
+                    }
+
+                    // 2. Вычисляем среднее
+                    for i in 0..n_mels {
+                        means[i] /= num_frames;
+                    }
+
+                    // 3. Вычисляем сумму квадратов отклонений для каждого канала
+                    for frame in &log_spec {
+                        for (i, &val) in frame.iter().enumerate() {
+                            let d = val as f64 - means[i];
+                            stds[i] += d * d;
+                        }
+                    }
+
+                    // 4. Вычисляем стандартное отклонение
+                    for i in 0..n_mels {
+                        stds[i] = (stds[i] / num_frames).sqrt().max(1e-5);
+                    }
+
+                    // 5. Нормализуем значения
+                    for frame in log_spec.iter_mut() {
+                        for (i, val) in frame.iter_mut().enumerate() {
+                            *val = ((*val as f64 - means[i]) / stds[i]) as f32;
                         }
                     }
                 }

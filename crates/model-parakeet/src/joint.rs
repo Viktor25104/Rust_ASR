@@ -26,7 +26,7 @@ struct Linear {
 impl Linear {
     fn load(in_dim: usize, out_dim: usize, vb: VarBuilder) -> Result<Self> {
         let weight = vb.get((out_dim, in_dim), "weight")?;
-        let bias = vb.get(out_dim, "bias")?;
+        let bias = vb.get(out_dim, "bias").or_else(|_| Tensor::zeros(out_dim, vb.dtype(), vb.device()))?;
         Ok(Self { weight, bias })
     }
 }

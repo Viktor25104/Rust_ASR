@@ -22,9 +22,13 @@ fn linear_no_bias(in_dim: usize, out_dim: usize, vb: VarBuilder) -> Result<candl
     candle_nn::linear_no_bias(in_dim, out_dim, vb)
 }
 
-/// Загрузка Linear с bias.
+/// Загрузка Linear с bias (с фоллбеком на no_bias).
 fn linear_with_bias(in_dim: usize, out_dim: usize, vb: VarBuilder) -> Result<candle_nn::Linear> {
-    candle_nn::linear(in_dim, out_dim, vb)
+    if vb.contains_tensor("bias") {
+        candle_nn::linear(in_dim, out_dim, vb)
+    } else {
+        candle_nn::linear_no_bias(in_dim, out_dim, vb)
+    }
 }
 
 // ============================================================================
@@ -40,7 +44,7 @@ struct LayerNorm {
 impl LayerNorm {
     fn load(dim: usize, vb: VarBuilder) -> Result<Self> {
         let weight = vb.get(dim, "weight")?;
-        let bias = vb.get(dim, "bias")?;
+        let bias = vb.get(dim, "bias").or_else(|_| Tensor::zeros(dim, vb.dtype(), vb.device()))?;
         Ok(Self {
             weight,
             bias,
@@ -74,8 +78,8 @@ struct BatchNorm1d {
 
 impl BatchNorm1d {
     fn load(dim: usize, vb: VarBuilder) -> Result<Self> {
-        let weight = vb.get(dim, "weight")?;
-        let bias = vb.get(dim, "bias")?;
+        let weight = vb.get(dim, "weight").or_else(|_| Tensor::ones(dim, vb.dtype(), vb.device()))?;
+        let bias = vb.get(dim, "bias").or_else(|_| Tensor::zeros(dim, vb.dtype(), vb.device()))?;
         let running_mean = vb.get(dim, "running_mean")?;
         let running_var = vb.get(dim, "running_var")?;
         Ok(Self {
@@ -140,23 +144,23 @@ impl DwStridingSubsampling {
 
         // Stage 0: Conv2d(1, C, 3, stride=2)
         let conv0_w = conv_vb.get((c, 1, 3, 3), "0.weight")?;
-        let conv0_b = conv_vb.get(c, "0.bias")?;
+        let conv0_b = conv_vb.get(c, "0.bias").or_else(|_| Tensor::zeros(c, vb.dtype(), vb.device()))?;
 
         // Stage 1: depthwise Conv2d(C, C, 3, groups=C, stride=2)
         let conv2_w = conv_vb.get((c, 1, 3, 3), "2.weight")?;
-        let conv2_b = conv_vb.get(c, "2.bias")?;
+        let conv2_b = conv_vb.get(c, "2.bias").or_else(|_| Tensor::zeros(c, vb.dtype(), vb.device()))?;
 
         // Stage 1: pointwise Conv2d(C, C, 1)
         let conv3_w = conv_vb.get((c, c, 1, 1), "3.weight")?;
-        let conv3_b = conv_vb.get(c, "3.bias")?;
+        let conv3_b = conv_vb.get(c, "3.bias").or_else(|_| Tensor::zeros(c, vb.dtype(), vb.device()))?;
 
         // Stage 2: depthwise Conv2d(C, C, 3, groups=C, stride=2)
         let conv5_w = conv_vb.get((c, 1, 3, 3), "5.weight")?;
-        let conv5_b = conv_vb.get(c, "5.bias")?;
+        let conv5_b = conv_vb.get(c, "5.bias").or_else(|_| Tensor::zeros(c, vb.dtype(), vb.device()))?;
 
         // Stage 2: pointwise Conv2d(C, C, 1)
         let conv6_w = conv_vb.get((c, c, 1, 1), "6.weight")?;
-        let conv6_b = conv_vb.get(c, "6.bias")?;
+        let conv6_b = conv_vb.get(c, "6.bias").or_else(|_| Tensor::zeros(c, vb.dtype(), vb.device()))?;
 
         // Проекция: Linear(C * freq_out, d_model)
         // freq_out = feat_in / 8 = 128 / 8 = 16
@@ -218,6 +222,7 @@ impl DwStridingSubsampling {
         let x = conv2d_manual(&x, &self.conv5_w, Some(&self.conv5_b), 2, 1, self.channels)?;
         // Pointwise Conv2d(C→C, 1×1)
         let x = conv2d_manual(&x, &self.conv6_w, Some(&self.conv6_b), 1, 0, 1)?;
+        let x = x.relu()?;
         debug!(
             "  After stage2: {:?}, [{:.4}, {:.4}]",
             x.shape(),
@@ -351,8 +356,8 @@ impl RelPositionMultiHeadAttention {
         let linear_out = linear_with_bias(d_model, d_model, vb.pp("linear_out"))?;
         let linear_pos = linear_no_bias(d_model, d_model, vb.pp("linear_pos"))?;
 
-        let pos_bias_u = vb.get((n_heads, d_k), "pos_bias_u")?;
-        let pos_bias_v = vb.get((n_heads, d_k), "pos_bias_v")?;
+        let pos_bias_u = vb.get((n_heads, d_k), "pos_bias_u").or_else(|_| Tensor::zeros((n_heads, d_k), vb.dtype(), vb.device()))?;
+        let pos_bias_v = vb.get((n_heads, d_k), "pos_bias_v").or_else(|_| Tensor::zeros((n_heads, d_k), vb.dtype(), vb.device()))?;
 
         Ok(Self {
             linear_q,
@@ -493,12 +498,12 @@ struct ConformerConvolution {
 impl ConformerConvolution {
     fn load(d_model: usize, kernel_size: usize, vb: VarBuilder) -> Result<Self> {
         let pointwise_conv1_w = vb.get((2 * d_model, d_model, 1), "pointwise_conv1.weight")?;
-        let pointwise_conv1_b = vb.get((2 * d_model,), "pointwise_conv1.bias")?;
+        let pointwise_conv1_b = vb.get((2 * d_model,), "pointwise_conv1.bias").or_else(|_| Tensor::zeros(2 * d_model, vb.dtype(), vb.device()))?;
         let depthwise_conv_w = vb.get((d_model, 1, kernel_size), "depthwise_conv.weight")?;
-        let depthwise_conv_b = vb.get((d_model,), "depthwise_conv.bias")?;
+        let depthwise_conv_b = vb.get((d_model,), "depthwise_conv.bias").or_else(|_| Tensor::zeros(d_model, vb.dtype(), vb.device()))?;
         let batch_norm = BatchNorm1d::load(d_model, vb.pp("batch_norm"))?;
         let pointwise_conv2_w = vb.get((d_model, d_model, 1), "pointwise_conv2.weight")?;
-        let pointwise_conv2_b = vb.get((d_model,), "pointwise_conv2.bias")?;
+        let pointwise_conv2_b = vb.get((d_model,), "pointwise_conv2.bias").or_else(|_| Tensor::zeros(d_model, vb.dtype(), vb.device()))?;
 
         Ok(Self {
             pointwise_conv1_w,

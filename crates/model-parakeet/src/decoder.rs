@@ -37,8 +37,8 @@ impl LstmLayer {
         let gate_size = 4 * hidden_size;
         let weight_ih = vb.get((gate_size, input_size), &format!("weight_ih_l{layer_idx}"))?;
         let weight_hh = vb.get((gate_size, hidden_size), &format!("weight_hh_l{layer_idx}"))?;
-        let bias_ih = vb.get(gate_size, &format!("bias_ih_l{layer_idx}"))?;
-        let bias_hh = vb.get(gate_size, &format!("bias_hh_l{layer_idx}"))?;
+        let bias_ih = vb.get(gate_size, &format!("bias_ih_l{layer_idx}")).or_else(|_| Tensor::zeros(gate_size, vb.dtype(), vb.device()))?;
+        let bias_hh = vb.get(gate_size, &format!("bias_hh_l{layer_idx}")).or_else(|_| Tensor::zeros(gate_size, vb.dtype(), vb.device()))?;
         Ok(Self {
             weight_ih,
             weight_hh,
@@ -108,68 +108,63 @@ impl LstmState {
 }
 
 /// Prediction Network: Embedding + N-layer LSTM.
-pub struct PredictionNet {
-    embedding: Tensor, // [vocab_size, embed_dim]
-    lstm_layers: Vec<LstmLayer>,
-    hidden_size: usize,
-    num_layers: usize,
-    blank_idx: usize,
-}
+    pub struct PredictionNet {
+        embedding: Tensor, // [vocab_size, embed_dim]
+        lstm_layers: Vec<LstmLayer>,
+        hidden_size: usize,
+        num_layers: usize,
+        blank_idx: usize,
+        blank_as_pad: bool,
+    }
 
-impl PredictionNet {
-    /// Загрузка из safetensors.
-    ///
-    /// Ключи:
-    /// - prediction.embed.weight
-    /// - prediction.dec_rnn.lstm.{weight_ih_l0, weight_hh_l0, ...}
-    pub fn load(config: &DecoderConfig, vb: VarBuilder) -> Result<Self> {
-        let pred_vb = vb.pp("prediction");
+    impl PredictionNet {
+        /// Загрузка из safetensors.
+        ///
+        /// Ключи:
+        /// - prediction.embed.weight
+        /// - prediction.dec_rnn.lstm.{weight_ih_l0, weight_hh_l0, ...}
+        pub fn load(config: &DecoderConfig, vb: VarBuilder) -> Result<Self> {
+            let pred_vb = vb.pp("prediction");
 
-        // Embedding
-        let embedding = pred_vb.get((config.vocab_size, config.embed_dim), "embed.weight")?;
+            // Embedding. Размер (vocab_size, embed_dim) или (vocab_size+1, embed_dim).
+            // Если blank_as_pad, то вес обычно имеет размер vocab_size.
+            let embedding = pred_vb.get((config.vocab_size, config.embed_dim), "embed.weight")?;
 
-        // LSTM layers
-        let lstm_vb = pred_vb.pp("dec_rnn").pp("lstm");
-        let mut lstm_layers = Vec::with_capacity(config.num_lstm_layers);
-        for i in 0..config.num_lstm_layers {
-            let input_size = if i == 0 { config.embed_dim } else { config.pred_hidden };
-            let layer = LstmLayer::load(input_size, config.pred_hidden, i, lstm_vb.clone())?;
-            lstm_layers.push(layer);
+            // LSTM layers
+            let lstm_vb = pred_vb.pp("dec_rnn").pp("lstm");
+            let mut lstm_layers = Vec::with_capacity(config.num_lstm_layers);
+            for i in 0..config.num_lstm_layers {
+                let input_size = if i == 0 { config.embed_dim } else { config.pred_hidden };
+                let layer = LstmLayer::load(input_size, config.pred_hidden, i, lstm_vb.clone())?;
+                lstm_layers.push(layer);
+            }
+
+            debug!(
+                "PredictionNet загружен: vocab={}, embed={}, LSTM {}×{}",
+                config.vocab_size, config.embed_dim, config.num_lstm_layers, config.pred_hidden
+            );
+
+            Ok(Self {
+                embedding,
+                lstm_layers,
+                hidden_size: config.pred_hidden,
+                num_layers: config.num_lstm_layers,
+                blank_idx: config.blank_idx,
+                blank_as_pad: config.blank_as_pad.unwrap_or(false),
+            })
         }
 
-        debug!(
-            "PredictionNet загружен: vocab={}, embed={}, LSTM {}×{}",
-            config.vocab_size, config.embed_dim, config.num_lstm_layers, config.pred_hidden
-        );
+        /// Начальное состояние LSTM.
+        pub fn initial_state(&self, device: &Device) -> Result<LstmState> {
+            LstmState::zeros(self.num_layers, self.hidden_size, self.embedding.dtype(), device)
+        }
 
-        Ok(Self {
-            embedding,
-            lstm_layers,
-            hidden_size: config.pred_hidden,
-            num_layers: config.num_lstm_layers,
-            blank_idx: config.blank_idx,
-        })
-    }
+        /// Forward одного шага: token_id → (output [hidden], new_state).
+        pub fn step(&self, mut token_id: u32, state: &LstmState) -> Result<(Tensor, LstmState)> {
+            let device = self.embedding.device();
 
-    /// Начальное состояние LSTM.
-    pub fn initial_state(&self, device: &Device) -> Result<LstmState> {
-        LstmState::zeros(self.num_layers, self.hidden_size, self.embedding.dtype(), device)
-    }
-
-    /// Forward одного шага: token_id → (output [hidden], new_state).
-    ///
-    /// При blank-токене эмбеддинг — нулевой вектор.
-    pub fn step(&self, token_id: u32, state: &LstmState) -> Result<(Tensor, LstmState)> {
-        let device = self.embedding.device();
-
-        // Embedding lookup
-        let embed = if (token_id as usize) == self.blank_idx {
-            // Для blank используем нулевой вектор (как при инициализации)
-            Tensor::zeros(self.embedding.dim(1)?, self.embedding.dtype(), device)?
-        } else {
             let idx = Tensor::new(&[token_id], device)?;
-            self.embedding.embedding(&idx)?.squeeze(0)?
-        };
+            let embed = self.embedding.embedding(&idx)?.squeeze(0)?;
 
         // Прогнать через LSTM слои
         let mut x = embed;

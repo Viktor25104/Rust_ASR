@@ -60,14 +60,32 @@ impl SentencePieceTokenizer {
             AsrError::Model("vocab.json должен быть JSON-объектом".into())
         })?;
 
-        let mut vocab = vec![String::new(); obj.len()];
+        let mut max_id = 0;
+        let mut entries = Vec::new();
+
         for (piece, info) in obj {
-            if let Some(id) = info.get("id").and_then(|v| v.as_u64()) {
+            let id_opt = if let Some(id_val) = info.get("id") {
+                id_val.as_u64()
+            } else {
+                info.as_u64()
+            };
+
+            if let Some(id) = id_opt {
                 let idx = id as usize;
-                if idx < vocab.len() {
-                    vocab[idx] = piece.clone();
+                if idx > max_id {
+                    max_id = idx;
                 }
+                // Для SentencePiece: меняем спец. символ '_' (U+2581) обратно на пробел!
+                // И Parakeet использует ' ', а не '▁' (это был мой старый хардкод, но на всякий случай оставим оба)
+                let mut decoded = piece.replace('\u{2581}', " ");
+                decoded = decoded.replace('▁', " ");
+                entries.push((idx, decoded));
             }
+        }
+
+        let mut vocab = vec![String::new(); max_id + 1];
+        for (idx, text) in entries {
+            vocab[idx] = text;
         }
 
         info!("SentencePiece токенизатор: {} токенов", vocab.len());

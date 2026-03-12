@@ -115,6 +115,10 @@ pub struct DecoderConfig {
 
     /// Индекс blank-токена (8192).
     pub blank_idx: usize,
+
+    /// Следует ли использовать 0 вместо blank_idx (default: false)
+    #[serde(default)]
+    pub blank_as_pad: Option<bool>,
 }
 
 /// Конфигурация Joint Network.
@@ -186,6 +190,7 @@ impl ParakeetConfig {
                 embed_dim: 640,
                 num_lstm_layers: 2,
                 blank_idx: 8192,
+                blank_as_pad: Some(false),
             },
             joint: JointConfig {
                 joint_hidden: 640,

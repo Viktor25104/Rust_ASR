@@ -339,9 +339,19 @@ def filter_weights(state_dict: dict) -> dict:
 
 def create_config_json(config_info: dict, dims: dict, output_path: str):
     """Создаёт config.json для загрузки из Rust."""
-    # Берём параметры из конфига, перезаписываем реальными из dims
+    dec_info = config_info.get("decoder", {})
+    joint_info = config_info.get("joint", {})
+    
+    # Мы используем dims для абсолютной точности:
+    # dims['vocab_size'] - это размер Pytorch Embedding-слоя в safetensors.
+    # Он ВСЕГДА равен количеству токенов + 1 для blank токена (например, 8193).
+    # Следовательно, blank_idx - это ВСЕГДА последний элемент таблицы.
+    vocab_size_from_weights = dims.get("vocab_size", 8193)
+    blank_idx = vocab_size_from_weights - 1
+    blank_as_pad = dec_info.get("blank_as_pad", False)
+
     config = {
-        "model_name": "parakeet-tdt-0.6b-v3",
+        "model_name": "parakeet-tdt",
         "model_class": "tdt",
         "sample_rate": 16000,
         "preprocessor": config_info.get('preprocessor', {
@@ -369,11 +379,12 @@ def create_config_json(config_info: dict, dims: dict, output_path: str):
         },
         "decoder": {
             "decoder_type": "lstm",
-            "vocab_size": dims.get('vocab_size', 8193),
+            "vocab_size": vocab_size_from_weights,
             "pred_hidden": dims.get('pred_hidden', 640),
             "embed_dim": dims.get('pred_hidden', 640),
-            "num_lstm_layers": 2,
-            "blank_idx": dims.get('vocab_size', 8193) - 1,
+            "num_lstm_layers": dec_info.get('prednet', {}).get('pred_rnn_layers', 2),
+            "blank_idx": blank_idx,
+            "blank_as_pad": blank_as_pad,
         },
         "joint": {
             "joint_hidden": dims.get('joint_hidden', 640),
@@ -460,24 +471,32 @@ def convert_nemo(nemo_path: str, output_dir: str, inspect_only: bool = False):
         tokenizer_vocab = glob.glob(os.path.join(tmpdir, "**/*.vocab"), recursive=True)
         
         vocab_path = os.path.join(output_dir, "vocab.json")
+        
+        # Проверяем, есть ли явный vocabulary в конфиге (как в 0.6B Multi)
+        explicit_vocab = config_info.get("joint", {}).get("vocabulary")
+        if not explicit_vocab:
+            explicit_vocab = config_info.get("decoder", {}).get("vocabulary")
+            
+        if explicit_vocab and isinstance(explicit_vocab, list):
+            vocab = {piece: i for i, piece in enumerate(explicit_vocab)}
+            with open(vocab_path, 'w', encoding='utf-8') as f:
+                json.dump(vocab, f, ensure_ascii=False, indent=1)
+            print(f"vocab.json сгенерирован из model_config.yaml vocabulary ({len(vocab)} токенов)")
+            
+            # Если есть tokenizer.model, просто копируем его для истории
+            if tokenizer_model:
+                shutil.copy2(tokenizer_model[0], os.path.join(output_dir, "tokenizer.model"))
 
-        if tokenizer_model:
-            tokenizer_src = tokenizer_model[0]
+        elif tokenizer_model:
+            model_src = tokenizer_model[0]
             dst = os.path.join(output_dir, "tokenizer.model")
-            shutil.copy2(tokenizer_src, dst)
+            shutil.copy2(model_src, dst)
             print(f"Токенизатор скопирован: {dst}")
-
-            # Извлекаем vocab если sentencepiece доступен
+            
             try:
                 import sentencepiece as spm
-                sp = spm.SentencePieceProcessor()
-                sp.Load(tokenizer_src)
-
-                vocab = {}
-                for i in range(sp.GetPieceSize()):
-                    piece = sp.IdToPiece(i)
-                    score = sp.GetScore(i)
-                    vocab[piece] = {"id": i, "score": score}
+                sp = spm.SentencePieceProcessor(model_file=dst)
+                vocab = {sp.id_to_piece(id): id for id in range(sp.get_piece_size())}
 
                 with open(vocab_path, 'w', encoding='utf-8') as f:
                     json.dump(vocab, f, ensure_ascii=False, indent=1)
@@ -499,7 +518,7 @@ def convert_nemo(nemo_path: str, output_dir: str, inspect_only: bool = False):
                     parts = line.rstrip('\n').split('\t')
                     piece = parts[0]
                     score = float(parts[1]) if len(parts) > 1 else 0.0
-                    vocab[piece] = {"id": i, "score": score}
+                    vocab[piece] = i
             
             with open(vocab_path, 'w', encoding='utf-8') as f:
                 json.dump(vocab, f, ensure_ascii=False, indent=1)
