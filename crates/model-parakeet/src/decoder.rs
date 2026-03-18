@@ -159,9 +159,37 @@ impl LstmState {
             LstmState::zeros(self.num_layers, self.hidden_size, self.embedding.dtype(), device)
         }
 
+        /// Пропустить через prediction network набор prompt-токенов.
+        ///
+        /// Возвращает обновлённое состояние и последний токен prompt-а,
+        /// который затем должен стать стартовым `last_token` для TDT-декодера.
+        pub fn prime_with_tokens(
+            &self,
+            state: &LstmState,
+            prompt_tokens: &[u32],
+        ) -> Result<(LstmState, Option<u32>)> {
+            let mut current_state = LstmState {
+                h: state.h.iter().cloned().collect(),
+                c: state.c.iter().cloned().collect(),
+            };
+            let mut last_token = None;
+
+            for &token in prompt_tokens {
+                let (_, next_state) = self.step(token, &current_state)?;
+                current_state = next_state;
+                last_token = Some(token);
+            }
+
+            Ok((current_state, last_token))
+        }
+
         /// Forward одного шага: token_id → (output [hidden], new_state).
         pub fn step(&self, mut token_id: u32, state: &LstmState) -> Result<(Tensor, LstmState)> {
             let device = self.embedding.device();
+
+            if self.blank_as_pad && token_id as usize == self.blank_idx {
+                token_id = 0;
+            }
 
             let idx = Tensor::new(&[token_id], device)?;
             let embed = self.embedding.embedding(&idx)?.squeeze(0)?;

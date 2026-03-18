@@ -49,6 +49,7 @@ impl TdtGreedyDecoder {
         encoder_output: &Tensor,
         prediction_net: &PredictionNet,
         joint: &JointNetwork,
+        prompt_tokens: &[u32],
     ) -> Result<TdtResult> {
         let t_total = encoder_output.dim(0)?;
         let device = encoder_output.device();
@@ -56,8 +57,10 @@ impl TdtGreedyDecoder {
         debug!("TDT decode: {} фреймов энкодера", t_total);
 
         let mut hypothesis: Vec<u32> = Vec::new();
-        let mut state = prediction_net.initial_state(device)?;
-        let mut last_token: u32 = self.blank_idx as u32;
+        let initial_state = prediction_net.initial_state(device)?;
+        let (mut state, prompt_last_token) =
+            prediction_net.prime_with_tokens(&initial_state, prompt_tokens)?;
+        let mut last_token: u32 = prompt_last_token.unwrap_or(self.blank_idx as u32);
         let mut time_idx: usize = 0;
         let mut step_count: usize = 0;
 

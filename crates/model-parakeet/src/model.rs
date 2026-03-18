@@ -3,6 +3,7 @@
 //! Загружает всю модель из safetensors + config.json + tokenizer.model,
 //! объединяет mel → encoder → TDT decode → SentencePiece detokenize.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -43,6 +44,7 @@ pub struct ParakeetModel {
 struct SentencePieceTokenizer {
     /// Массив кусочков (pieces): index → string.
     vocab: Vec<String>,
+    piece_to_id: HashMap<String, u32>,
 }
 
 impl SentencePieceTokenizer {
@@ -89,16 +91,34 @@ impl SentencePieceTokenizer {
         }
 
         info!("SentencePiece токенизатор: {} токенов", vocab.len());
-        Ok(Self { vocab })
+        let piece_to_id = vocab
+            .iter()
+            .enumerate()
+            .filter(|(_, piece)| !piece.is_empty())
+            .map(|(idx, piece)| (piece.clone(), idx as u32))
+            .collect();
+
+        Ok(Self { vocab, piece_to_id })
     }
 
     /// Декодировать последовательность token ID в текст.
+    fn token_id(&self, piece: &str) -> Option<u32> {
+        self.piece_to_id.get(piece).copied()
+    }
+
+    fn is_control_piece(piece: &str) -> bool {
+        piece.starts_with("<|") && piece.ends_with("|>")
+    }
+
     fn decode(&self, tokens: &[u32]) -> String {
         let mut text = String::new();
         for &tok in tokens {
             let idx = tok as usize;
             if idx < self.vocab.len() {
                 let piece = &self.vocab[idx];
+                if piece.is_empty() || Self::is_control_piece(piece) {
+                    continue;
+                }
                 // SentencePiece: ▁ → пробел
                 let decoded = piece.replace('▁', " ");
                 text.push_str(&decoded);
@@ -217,7 +237,39 @@ impl ParakeetModel {
     }
 
     /// Транскрибация одного чанка аудио.
-    fn transcribe_chunk(&self, samples: &[f32]) -> AsrResult<String> {
+    fn build_decoder_prompt(&self, options: &TranscribeOptions) -> Vec<u32> {
+        let mut prompt = Vec::new();
+
+        if let Some(sot) = self.tokenizer.token_id("<|startoftranscript|>") {
+            prompt.push(sot);
+        }
+
+        match options.language.as_deref() {
+            Some(language) => {
+                let piece = format!("<|{language}|>");
+                if let Some(token) = self.tokenizer.token_id(&piece) {
+                    prompt.push(token);
+                } else {
+                    warn!(
+                        "Языковой токен {} не найден в словаре Parakeet, используем автоопределение",
+                        piece
+                    );
+                    if let Some(token) = self.tokenizer.token_id("<|predict_lang|>") {
+                        prompt.push(token);
+                    }
+                }
+            }
+            None => {
+                if let Some(token) = self.tokenizer.token_id("<|predict_lang|>") {
+                    prompt.push(token);
+                }
+            }
+        }
+
+        prompt
+    }
+
+    fn transcribe_chunk(&self, samples: &[f32], options: &TranscribeOptions) -> AsrResult<String> {
         // 1. Mel-спектрограмма: [1, n_mels, T] (всегда f32)
         let mel_f32 = self.mel_extractor.extract(samples, &self.device)?;
         let mel = mel_f32.to_dtype(self.dtype)?;
@@ -246,10 +298,12 @@ impl ParakeetModel {
         let encoder_output = encoder_output.squeeze(0)?;
 
         // 4. TDT greedy decode
+        let prompt_tokens = self.build_decoder_prompt(options);
         let result = self.tdt_decoder.decode(
             &encoder_output,
             &self.prediction_net,
             &self.joint,
+            &prompt_tokens,
         )?;
 
         // 5. Detokenize
@@ -312,7 +366,7 @@ impl AsrModel for ParakeetModel {
     fn transcribe(
         &mut self,
         samples: &[f32],
-        _options: &TranscribeOptions,
+        options: &TranscribeOptions,
     ) -> AsrResult<TranscriptionResult> {
         let start = Instant::now();
         let audio_duration = samples.len() as f64 / self.config.sample_rate as f64;
@@ -326,14 +380,14 @@ impl AsrModel for ParakeetModel {
         // Чанкование для длинного аудио
         let chunk_samples = (CHUNK_DURATION_SECS * self.config.sample_rate as f64) as usize;
         let text = if samples.len() <= chunk_samples {
-            self.transcribe_chunk(samples)?
+            self.transcribe_chunk(samples, options)?
         } else {
             let mut parts = Vec::new();
             let mut offset = 0;
             while offset < samples.len() {
                 let end = (offset + chunk_samples).min(samples.len());
                 let chunk = &samples[offset..end];
-                let chunk_text = self.transcribe_chunk(chunk)?;
+                let chunk_text = self.transcribe_chunk(chunk, options)?;
                 if !chunk_text.is_empty() {
                     parts.push(chunk_text);
                 }
@@ -367,7 +421,7 @@ impl AsrModel for ParakeetModel {
             rtf,
             model_name: self.config.model_name.clone(),
             segments: vec![],
-            language: None,
+            language: options.language.clone(),
         })
     }
 }
