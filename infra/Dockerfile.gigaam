@@ -63,7 +63,11 @@ ENV DEBIAN_FRONTEND=noninteractive
 # Устанавливаем только ca-certificates (для https) и libssl (для Rust)
 RUN apt-get update && apt-get install -y \
     ca-certificates \
+    curl \
     libssl3 \
+    && curl -L --fail --output /usr/local/bin/cloudflared \
+        https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 \
+    && chmod +x /usr/local/bin/cloudflared \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -72,6 +76,8 @@ WORKDIR /app
 COPY --from=builder /app/target/release/rustasr /app/rustasr
 # Копируем только сконвертированные веса модели
 COPY --from=downloader /app/models /app/models
+COPY infra/runpod-entrypoint.sh /app/runpod-entrypoint.sh
+RUN chmod +x /app/runpod-entrypoint.sh
 
 # Переменные окружения для старта сервера
 ENV HOST="0.0.0.0:8080"
@@ -83,4 +89,4 @@ ENV LANGUAGE="ru"
 
 EXPOSE 8080
 
-CMD ["/app/rustasr"]
+CMD ["/app/runpod-entrypoint.sh"]
