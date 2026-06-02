@@ -1,0 +1,6 @@
+# Shell-скрипты всегда с LF: иначе CRLF ломает шебанг внутри Linux-контейнеров
+# (`/usr/bin/env: 'bash\r': No such file or directory`).
+*.sh text eol=lf
+
+# Прочие текстовые файлы нормализуются автоматически.
+* text=auto

@@ -26,8 +26,11 @@ RUN cargo chef prepare --recipe-path recipe.json
 FROM chef AS builder
 COPY --from=planner /app/recipe.json recipe.json
 
-# Собираем только зависимости (кэшируется Docker'ом)
-ENV CUDA_COMPUTE_CAP=86
+# Собираем только зависимости (кэшируется Docker'ом).
+# CUDA_COMPUTE_CAP по умолчанию 86 (A40); переопределяется при сборке под другую
+# карту, например `--build-arg CUDA_COMPUTE_CAP=89` для RTX 4000-й серии (Ada).
+ARG CUDA_COMPUTE_CAP=86
+ENV CUDA_COMPUTE_CAP=${CUDA_COMPUTE_CAP}
 RUN cargo chef cook --release --recipe-path recipe.json -p asr-server
 
 # Копируем исходный код и собираем приложение
