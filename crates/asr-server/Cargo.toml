@@ -10,29 +10,17 @@ license.workspace = true
 name = "rustasr"
 path = "src/main.rs"
 
+# Сервер использует модели только через фасад asr-engine (модельные
+# крейты подключаются им транзитивно через feature-gates).
 [dependencies]
 asr-core.workspace = true
-audio.workspace = true
-aut-encoder.workspace = true
-qwen3-decoder.workspace = true
-asr-pipeline = { path = "../asr-pipeline" }
 asr-engine = { path = "../asr-engine" }
-model-whisper = { path = "../model-whisper" }
-model-gigaam = { path = "../model-gigaam" }
-model-parakeet = { path = "../model-parakeet" }
 candle-core.workspace = true
-tokenizers.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-webrtc-vad.workspace = true
-serde.workspace = true
 serde_json.workspace = true
 
 tokio.workspace = true
 axum.workspace = true
 futures.workspace = true
-tokio-stream.workspace = true
-
-tokio-tungstenite = "0.24"
-tower-http.workspace = true

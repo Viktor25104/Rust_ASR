@@ -11,10 +11,9 @@ use axum::{
 use futures::{sink::SinkExt, stream::StreamExt};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use tracing::{info, warn, error};
 
-use audio::{Resampler, loader::to_mono};
 use asr_core::{TranscribeOptions, ModelType};
 
 // Ассистент-state для WebSocket: добавим чтение языка

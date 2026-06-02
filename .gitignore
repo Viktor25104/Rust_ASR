@@ -31,3 +31,7 @@ Thumbs.db
 # Test outputs
 *.npy
 reference_*.bin const.rs
+
+# Temporary run artifacts (diarization dumps, scratch venvs, etc.)
+tmp/
+temp/
